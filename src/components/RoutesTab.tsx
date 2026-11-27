@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { formatCep } from "@/lib/cep";
 import { parseCorreiosList } from "@/lib/correios-parser";
 import { calculateRouteFinancials } from "@/lib/financials";
+import { OpenStreetMapView } from "./OpenStreetMapView";
 import { MapPackage, MapStop, RouteMap } from "./RouteMap";
 
 interface RouteRecord {
@@ -96,6 +97,19 @@ export function RoutesTab() {
 
   const [activeListTab, setActiveListTab] = useState<1 | 2 | 3 | 4>(1);
   const [viewMode, setViewMode] = useState<"map" | "field">("map");
+  const [mapProvider, setMapProvider] = useState<"google" | "osm">(() => {
+    if (typeof window === "undefined") return "google";
+    return window.localStorage.getItem("correios_map_provider") === "osm"
+      ? "osm"
+      : "google";
+  });
+
+  function selectMapProvider(provider: "google" | "osm") {
+    setMapProvider(provider);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("correios_map_provider", provider);
+    }
+  }
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const loadDayRoutes = useCallback(async (dateStr: string) => {
@@ -630,37 +644,71 @@ export function RoutesTab() {
               <h2 style={{ margin: 0 }}>
                 Mapa Interativo &amp; Modo de Campo ({anchors.length} ancoras)
               </h2>
-              <div className="tabs">
-                <button
-                  type="button"
-                  className={`tab-btn ${viewMode === "map" ? "active" : ""}`}
-                  onClick={() => setViewMode("map")}
-                >
-                  Mapa Completo
-                </button>
-                <button
-                  type="button"
-                  className={`tab-btn ${viewMode === "field" ? "active" : ""}`}
-                  onClick={() => setViewMode("field")}
-                >
-                  Modo de Campo (Mobile)
-                </button>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                {viewMode === "map" && (
+                  <div className="tabs" aria-label="Provedor do mapa">
+                    <button
+                      type="button"
+                      className={`tab-btn ${mapProvider === "google" ? "active" : ""}`}
+                      onClick={() => selectMapProvider("google")}
+                    >
+                      Google Maps
+                    </button>
+                    <button
+                      type="button"
+                      className={`tab-btn ${mapProvider === "osm" ? "active" : ""}`}
+                      onClick={() => selectMapProvider("osm")}
+                    >
+                      OpenStreetMap
+                    </button>
+                  </div>
+                )}
+                <div className="tabs">
+                  <button
+                    type="button"
+                    className={`tab-btn ${viewMode === "map" ? "active" : ""}`}
+                    onClick={() => setViewMode("map")}
+                  >
+                    Mapa Completo
+                  </button>
+                  <button
+                    type="button"
+                    className={`tab-btn ${viewMode === "field" ? "active" : ""}`}
+                    onClick={() => setViewMode("field")}
+                  >
+                    Modo de Campo (Mobile)
+                  </button>
+                </div>
               </div>
             </div>
 
             {viewMode === "map" ? (
               <>
-                <RouteMap
-                  depotLat={routeDetail.depotLat}
-                  depotLng={routeDetail.depotLng}
-                  encodedPolyline={routeDetail.polylineEncoded}
-                  stops={stops}
-                  packages={packages}
-                  onPinMoved={handlePinMoved}
-                  onToggleDelivered={(pkgId, val) =>
-                    handlePatchPackage(pkgId, { isDelivered: val })
-                  }
-                />
+                {mapProvider === "osm" ? (
+                  <OpenStreetMapView
+                    depotLat={routeDetail.depotLat}
+                    depotLng={routeDetail.depotLng}
+                    encodedPolyline={routeDetail.polylineEncoded}
+                    stops={stops}
+                    packages={packages}
+                    onPinMoved={handlePinMoved}
+                    onToggleDelivered={(pkgId, val) =>
+                      handlePatchPackage(pkgId, { isDelivered: val })
+                    }
+                  />
+                ) : (
+                  <RouteMap
+                    depotLat={routeDetail.depotLat}
+                    depotLng={routeDetail.depotLng}
+                    encodedPolyline={routeDetail.polylineEncoded}
+                    stops={stops}
+                    packages={packages}
+                    onPinMoved={handlePinMoved}
+                    onToggleDelivered={(pkgId, val) =>
+                      handlePatchPackage(pkgId, { isDelivered: val })
+                    }
+                  />
+                )}
                 <div className="map-legend">
                   <span className="legend-item">
                     <span className="legend-dot" style={{ background: "#0F172A" }} />

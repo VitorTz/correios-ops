@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { formatCep, ISLAND_CEP_MAX, ISLAND_CEP_MIN } from "@/lib/cep";
+import { formatCep } from "@/lib/cep";
 import { parseCorreiosList } from "@/lib/correios-parser";
 import { calculateRouteFinancials } from "@/lib/financials";
 import { buildGoogleMapsLegLinks } from "@/lib/google-maps-links";
@@ -113,6 +113,7 @@ export function RoutesTab() {
   }
   const [feedback, setFeedback] = useState<string | null>(null);
   const [copiedLeg, setCopiedLeg] = useState<number | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const loadDayRoutes = useCallback(async (dateStr: string) => {
     const res = await fetch(`/api/routes?date=${dateStr}`);
@@ -161,6 +162,7 @@ export function RoutesTab() {
   }, [selectedDate, loadDayRoutes]);
 
   useEffect(() => {
+    setConfirmingDelete(false);
     if (activeRouteId) {
       loadRouteStatus(activeRouteId);
     }
@@ -298,6 +300,21 @@ export function RoutesTab() {
       await loadRouteStatus(activeRouteId);
       await loadDayRoutes(selectedDate);
     }
+  }
+
+  async function handleDeleteRoute() {
+    if (!activeRouteId) return;
+    setFeedback(null);
+    const res = await fetch(`/api/routes/${activeRouteId}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+      setFeedback(data.error ?? "Erro ao excluir a rota.");
+      return;
+    }
+    setConfirmingDelete(false);
+    await loadDayRoutes(selectedDate);
   }
 
   async function handlePatchPackage(
@@ -529,6 +546,39 @@ export function RoutesTab() {
                     ? "Status: Completa (reabrir)"
                     : "Marcar rota como Completa"}
                 </button>
+                {confirmingDelete ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn-outline"
+                      onClick={() => setConfirmingDelete(false)}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-outline"
+                      style={{
+                        background: "var(--ar-bg)",
+                        color: "var(--ar-ink)",
+                        borderColor: "var(--ar-border)",
+                        fontWeight: 600,
+                      }}
+                      onClick={handleDeleteRoute}
+                    >
+                      Confirmar exclusao
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-outline"
+                    style={{ color: "var(--ar-ink)", borderColor: "var(--ar-border)" }}
+                    onClick={() => setConfirmingDelete(true)}
+                  >
+                    Excluir rota
+                  </button>
+                )}
               </div>
             </div>
 
@@ -931,7 +981,7 @@ export function RoutesTab() {
 
           {/* Add packages (manual + bulk) */}
           <section className="panel">
-            <h2>Adicionar Encomendas (Range {ISLAND_CEP_MIN} ate {ISLAND_CEP_MAX})</h2>
+            <h2>Adicionar Encomendas (Range 88010-000 ate 88059-999)</h2>
             {feedback && (
               <p style={{ fontSize: 13.5, fontWeight: 600, color: "var(--primary-dark)" }}>
                 {feedback}

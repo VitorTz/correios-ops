@@ -430,3 +430,61 @@ tbody tr:hover {
     padding: 16px;
   }
 }
+
+/* Delivered package visual state in List 1 */
+tr.pkg-row-delivered {
+  background: var(--teal-soft);
+}
+
+tr.pkg-row-delivered:hover {
+  background: #ccfbf1;
+}
+
+.pkg-delivered-text {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.delivered-badge {
+  display: inline-flex;
+  align-items: center;
+  background: var(--teal-soft);
+  color: var(--teal);
+  border: 1px solid #99f6e4;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.btn-delivered-done {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  background: var(--teal);
+  color: #ffffff;
+  border: 1px solid var(--teal);
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.maps-links-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.maps-leg-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: var(--surface-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

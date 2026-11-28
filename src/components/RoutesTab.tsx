@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { formatCep } from "@/lib/cep";
+import { formatCep, ISLAND_CEP_MAX, ISLAND_CEP_MIN } from "@/lib/cep";
 import { parseCorreiosList } from "@/lib/correios-parser";
 import { calculateRouteFinancials } from "@/lib/financials";
+import { buildGoogleMapsLegLinks } from "@/lib/google-maps-links";
 import { OpenStreetMapView } from "./OpenStreetMapView";
 import { MapPackage, MapStop, RouteMap } from "./RouteMap";
 
@@ -98,10 +99,10 @@ export function RoutesTab() {
   const [activeListTab, setActiveListTab] = useState<1 | 2 | 3 | 4>(1);
   const [viewMode, setViewMode] = useState<"map" | "field">("map");
   const [mapProvider, setMapProvider] = useState<"google" | "osm">(() => {
-    if (typeof window === "undefined") return "google";
-    return window.localStorage.getItem("correios_map_provider") === "osm"
-      ? "osm"
-      : "google";
+    if (typeof window === "undefined") return "osm";
+    return window.localStorage.getItem("correios_map_provider") === "google"
+      ? "google"
+      : "osm";
   });
 
   function selectMapProvider(provider: "google" | "osm") {
@@ -111,6 +112,7 @@ export function RoutesTab() {
     }
   }
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [copiedLeg, setCopiedLeg] = useState<number | null>(null);
 
   const loadDayRoutes = useCallback(async (dateStr: string) => {
     const res = await fetch(`/api/routes?date=${dateStr}`);
@@ -350,6 +352,27 @@ export function RoutesTab() {
   const anchors = stops
     .filter((s) => s.stopType === "anchor")
     .sort((a, b) => a.sequenceOrder - b.sequenceOrder);
+
+  const deliveredList1Count = list1.filter((p) => p.isDelivered).length;
+
+  const googleMapsLegs = useMemo(() => {
+    if (!routeDetail || anchors.length === 0) return [];
+    return buildGoogleMapsLegLinks({
+      depotLat: routeDetail.depotLat,
+      depotLng: routeDetail.depotLng,
+      anchors,
+    });
+  }, [routeDetail, anchors]);
+
+  async function handleCopyLegLink(legNumber: number, url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedLeg(legNumber);
+      setTimeout(() => setCopiedLeg((prev) => (prev === legNumber ? null : prev)), 2000);
+    } catch {
+      setFeedback("Nao foi possivel copiar automaticamente. Use o botao Abrir no Maps.");
+    }
+  }
 
   return (
     <div>
@@ -692,9 +715,6 @@ export function RoutesTab() {
                     stops={stops}
                     packages={packages}
                     onPinMoved={handlePinMoved}
-                    onToggleDelivered={(pkgId, val) =>
-                      handlePatchPackage(pkgId, { isDelivered: val })
-                    }
                   />
                 ) : (
                   <RouteMap
@@ -704,9 +724,6 @@ export function RoutesTab() {
                     stops={stops}
                     packages={packages}
                     onPinMoved={handlePinMoved}
-                    onToggleDelivered={(pkgId, val) =>
-                      handlePatchPackage(pkgId, { isDelivered: val })
-                    }
                   />
                 )}
                 <div className="map-legend">
@@ -731,6 +748,51 @@ export function RoutesTab() {
                     Encomenda com AR
                   </span>
                 </div>
+
+                {googleMapsLegs.length > 0 && (
+                  <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600 }}>
+                      Links para seguir no Google Maps (celular · ate 10 paradas por trecho)
+                    </div>
+                    <div className="maps-links-grid">
+                      {googleMapsLegs.map((leg) => (
+                        <div key={leg.legNumber} className="maps-leg-card">
+                          <div>
+                            <strong style={{ fontSize: 13 }}>{leg.title}</strong>
+                            <div className="subtitle" style={{ marginTop: 2 }}>
+                              {leg.stopsRange} ({leg.stopCount} ancoras)
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            <a
+                              className="btn-accent"
+                              href={leg.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              Abrir no Maps
+                            </a>
+                            <button
+                              type="button"
+                              className="btn-outline"
+                              onClick={() => handleCopyLegLink(leg.legNumber, leg.url)}
+                            >
+                              {copiedLeg === leg.legNumber ? "Copiado!" : "Copiar link"}
+                            </button>
+                            <a
+                              className="btn-outline"
+                              href={`https://wa.me/?text=${encodeURIComponent(`${routeDetail.name} - ${leg.title} (${leg.stopsRange}): ${leg.url}`)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              WhatsApp
+                            </a>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </>
             ) : (
               <div>
@@ -869,7 +931,7 @@ export function RoutesTab() {
 
           {/* Add packages (manual + bulk) */}
           <section className="panel">
-            <h2>Adicionar Encomendas (Range 88010-000 ate 88059-999)</h2>
+            <h2>Adicionar Encomendas (Range {ISLAND_CEP_MIN} ate {ISLAND_CEP_MAX})</h2>
             {feedback && (
               <p style={{ fontSize: 13.5, fontWeight: 600, color: "var(--primary-dark)" }}>
                 {feedback}
@@ -956,7 +1018,7 @@ export function RoutesTab() {
                 className={`tab-btn ${activeListTab === 1 ? "active" : ""}`}
                 onClick={() => setActiveListTab(1)}
               >
-                Lista 1 · Ativas ({list1.length})
+                Lista 1 · Ativas ({deliveredList1Count}/{list1.length} entregues)
               </button>
               <button
                 type="button"
@@ -981,114 +1043,359 @@ export function RoutesTab() {
               </button>
             </div>
 
-            <table>
-              <thead>
-                <tr>
-                  <th>Objeto</th>
-                  <th>CEP</th>
-                  <th>Logradouro / Numero</th>
-                  <th>AR</th>
-                  <th>Acoes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(activeListTab === 1
-                  ? list1
-                  : activeListTab === 2
-                    ? list2
-                    : activeListTab === 3
-                      ? list3
-                      : list4
-                ).map((pkg) => (
-                  <tr key={pkg.id}>
-                    <td>
-                      <code>{pkg.trackingCode}</code>
-                    </td>
-                    <td>{formatCep(pkg.cep)}</td>
-                    <td>
-                      {pkg.logradouro ?? "-"}, {pkg.numeroRaw ?? "S/N"}
-                    </td>
-                    <td>{pkg.isAr ? <span className="ar-badge">AR</span> : "-"}</td>
-                    <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      {activeListTab === 1 && (
-                        <>
-                          <button
-                            type="button"
-                            className="tab-btn"
-                            onClick={() =>
-                              handlePatchPackage(pkg.id, { inAbsentList: true })
-                            }
+            {activeListTab === 1 && anchors.length > 0 ? (
+              <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+                {anchors.map((anchor) => {
+                  const anchorPkgs = list1.filter((p) => p.stopId === anchor.id);
+                  const childStops = stops.filter(
+                    (s) => s.parentAnchorId === anchor.id
+                  );
+                  const totalGroupCount =
+                    anchorPkgs.length +
+                    childStops.reduce(
+                      (sum, c) =>
+                        sum + list1.filter((p) => p.stopId === c.id).length,
+                      0
+                    );
+
+                  return (
+                    <div key={anchor.id} className="field-card" style={{ marginBottom: 0 }}>
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: 8,
+                          flexWrap: "wrap",
+                          marginBottom: 8,
+                        }}
+                      >
+                        <div>
+                          <strong>Ancora #{anchor.sequenceOrder}</strong> ·{" "}
+                          {anchor.label}{" "}
+                          <span className="sn-badge">
+                            {anchorPkgs.length} no ancora · {totalGroupCount} total
+                          </span>
+                        </div>
+                      </div>
+
+                      {anchorPkgs.length > 0 && (
+                        <div className="table-scroll">
+                          <table style={{ marginTop: 4 }}>
+                            <thead>
+                              <tr>
+                                <th>Objeto</th>
+                                <th>CEP</th>
+                                <th>Logradouro / Numero</th>
+                                <th>AR</th>
+                                <th>Acoes</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {anchorPkgs.map((pkg) => (
+                                <tr key={pkg.id} className={pkg.isDelivered ? "pkg-row-delivered" : undefined}>
+                                  <td>
+                                    <code className={pkg.isDelivered ? "pkg-delivered-text" : undefined}>
+                                      {pkg.trackingCode}
+                                    </code>{" "}
+                                    {pkg.isDelivered && <span className="delivered-badge">Entregue</span>}
+                                  </td>
+                                  <td>{formatCep(pkg.cep)}</td>
+                                  <td className={pkg.isDelivered ? "pkg-delivered-text" : undefined}>
+                                    {pkg.logradouro ?? "-"}, {pkg.numeroRaw ?? "S/N"}
+                                  </td>
+                                  <td>{pkg.isAr ? <span className="ar-badge">AR</span> : "-"}</td>
+                                  <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                    <button
+                                      type="button"
+                                      className={pkg.isDelivered ? "btn-delivered-done" : "btn-outline"}
+                                      onClick={() => handlePatchPackage(pkg.id, { isDelivered: !pkg.isDelivered })}
+                                    >
+                                      {pkg.isDelivered ? "Entregue ✓" : "Entregue"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn-outline"
+                                      onClick={() => handlePatchPackage(pkg.id, { inAbsentList: true })}
+                                    >
+                                      + Ausente
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn-outline"
+                                      onClick={() => handlePatchPackage(pkg.id, { inInsufficientList: true })}
+                                    >
+                                      + End. Insuf.
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn-outline"
+                                      onClick={() => handlePatchPackage(pkg.id, { isActive: false, autoRecalculate: true })}
+                                    >
+                                      Desativar &rarr; L4
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {childStops.map((adj) => {
+                        const adjPkgs = list1.filter((p) => p.stopId === adj.id);
+                        return (
+                          <div
+                            key={adj.id}
+                            style={{
+                              marginTop: 12,
+                              marginLeft: 14,
+                              paddingLeft: 14,
+                              borderLeft: "3px solid var(--teal)",
+                            }}
                           >
-                            + Ausente
-                          </button>
-                          <button
-                            type="button"
-                            className="tab-btn"
-                            onClick={() =>
-                              handlePatchPackage(pkg.id, {
-                                inInsufficientList: true,
-                              })
-                            }
-                          >
-                            + End. Insuf.
-                          </button>
-                          <button
-                            type="button"
-                            className="tab-btn"
-                            onClick={() =>
-                              handlePatchPackage(pkg.id, {
-                                isActive: false,
-                                autoRecalculate: true,
-                              })
-                            }
-                          >
-                            Desativar → L4
-                          </button>
-                        </>
-                      )}
-                      {activeListTab === 2 && (
-                        <button
-                          type="button"
-                          className="tab-btn"
-                          onClick={() =>
-                            handlePatchPackage(pkg.id, { inAbsentList: false })
-                          }
-                        >
-                          Remover copia
-                        </button>
-                      )}
-                      {activeListTab === 3 && (
-                        <button
-                          type="button"
-                          className="tab-btn"
-                          onClick={() =>
-                            handlePatchPackage(pkg.id, {
-                              inInsufficientList: false,
-                            })
-                          }
-                        >
-                          Remover copia
-                        </button>
-                      )}
-                      {activeListTab === 4 && (
-                        <button
-                          type="button"
-                          className="btn-primary"
-                          onClick={() =>
-                            handlePatchPackage(pkg.id, {
-                              isActive: true,
-                              autoRecalculate: true,
-                            })
-                          }
-                        >
-                          Reativar → L1
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--teal)" }}>
+                              &crarr; Adjacente ({adj.walkDistanceMeters ?? 0}m a pe) ·{" "}
+                              <span style={{ color: "var(--ink)" }}>{adj.label}</span>{" "}
+                              <span className="sn-badge">{adjPkgs.length} pct</span>
+                            </div>
+                            <div className="table-scroll">
+                              <table style={{ marginTop: 4 }}>
+                                <thead>
+                                  <tr>
+                                    <th>Objeto</th>
+                                    <th>CEP</th>
+                                    <th>Logradouro / Numero</th>
+                                    <th>AR</th>
+                                    <th>Acoes</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {adjPkgs.map((pkg) => (
+                                    <tr key={pkg.id} className={pkg.isDelivered ? "pkg-row-delivered" : undefined}>
+                                      <td>
+                                        <code className={pkg.isDelivered ? "pkg-delivered-text" : undefined}>
+                                          {pkg.trackingCode}
+                                        </code>{" "}
+                                        {pkg.isDelivered && <span className="delivered-badge">Entregue</span>}
+                                      </td>
+                                      <td>{formatCep(pkg.cep)}</td>
+                                      <td className={pkg.isDelivered ? "pkg-delivered-text" : undefined}>
+                                        {pkg.logradouro ?? "-"}, {pkg.numeroRaw ?? "S/N"}
+                                      </td>
+                                      <td>{pkg.isAr ? <span className="ar-badge">AR</span> : "-"}</td>
+                                      <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                        <button
+                                          type="button"
+                                          className={pkg.isDelivered ? "btn-delivered-done" : "btn-outline"}
+                                          onClick={() => handlePatchPackage(pkg.id, { isDelivered: !pkg.isDelivered })}
+                                        >
+                                          {pkg.isDelivered ? "Entregue ✓" : "Entregue"}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="btn-outline"
+                                          onClick={() => handlePatchPackage(pkg.id, { inAbsentList: true })}
+                                        >
+                                          + Ausente
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="btn-outline"
+                                          onClick={() => handlePatchPackage(pkg.id, { inInsufficientList: true })}
+                                        >
+                                          + End. Insuf.
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="btn-outline"
+                                          onClick={() => handlePatchPackage(pkg.id, { isActive: false, autoRecalculate: true })}
+                                        >
+                                          Desativar &rarr; L4
+                                        </button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+
+                {list1.filter((p) => p.stopId === null).length > 0 && (
+                  <div className="field-card" style={{ marginBottom: 0 }}>
+                    <strong>Aguardando calculo da rota ({list1.filter((p) => p.stopId === null).length} pct)</strong>
+                    <div className="table-scroll">
+                      <table style={{ marginTop: 6 }}>
+                        <thead>
+                          <tr>
+                            <th>Objeto</th>
+                            <th>CEP</th>
+                            <th>Logradouro / Numero</th>
+                            <th>AR</th>
+                            <th>Acoes</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {list1
+                            .filter((p) => p.stopId === null)
+                            .map((pkg) => (
+                              <tr key={pkg.id} className={pkg.isDelivered ? "pkg-row-delivered" : undefined}>
+                                <td>
+                                  <code className={pkg.isDelivered ? "pkg-delivered-text" : undefined}>
+                                    {pkg.trackingCode}
+                                  </code>{" "}
+                                  {pkg.isDelivered && <span className="delivered-badge">Entregue</span>}
+                                </td>
+                                <td>{formatCep(pkg.cep)}</td>
+                                <td className={pkg.isDelivered ? "pkg-delivered-text" : undefined}>
+                                  {pkg.logradouro ?? "-"}, {pkg.numeroRaw ?? "S/N"}
+                                </td>
+                                <td>{pkg.isAr ? <span className="ar-badge">AR</span> : "-"}</td>
+                                <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                  <button
+                                    type="button"
+                                    className={pkg.isDelivered ? "btn-delivered-done" : "btn-outline"}
+                                    onClick={() => handlePatchPackage(pkg.id, { isDelivered: !pkg.isDelivered })}
+                                  >
+                                    {pkg.isDelivered ? "Entregue ✓" : "Entregue"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn-outline"
+                                    onClick={() => handlePatchPackage(pkg.id, { inAbsentList: true })}
+                                  >
+                                    + Ausente
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn-outline"
+                                    onClick={() => handlePatchPackage(pkg.id, { inInsufficientList: true })}
+                                  >
+                                    + End. Insuf.
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn-outline"
+                                    onClick={() => handlePatchPackage(pkg.id, { isActive: false, autoRecalculate: true })}
+                                  >
+                                    Desativar &rarr; L4
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Objeto</th>
+                      <th>CEP</th>
+                      <th>Logradouro / Numero</th>
+                      <th>AR</th>
+                      <th>Acoes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(activeListTab === 1
+                      ? list1
+                      : activeListTab === 2
+                        ? list2
+                        : activeListTab === 3
+                          ? list3
+                          : list4
+                    ).map((pkg) => (
+                      <tr key={pkg.id} className={activeListTab === 1 && pkg.isDelivered ? "pkg-row-delivered" : undefined}>
+                        <td>
+                          <code className={activeListTab === 1 && pkg.isDelivered ? "pkg-delivered-text" : undefined}>
+                            {pkg.trackingCode}
+                          </code>{" "}
+                          {activeListTab === 1 && pkg.isDelivered && (
+                            <span className="delivered-badge">Entregue</span>
+                          )}
+                        </td>
+                        <td>{formatCep(pkg.cep)}</td>
+                        <td className={activeListTab === 1 && pkg.isDelivered ? "pkg-delivered-text" : undefined}>
+                          {pkg.logradouro ?? "-"}, {pkg.numeroRaw ?? "S/N"}
+                        </td>
+                        <td>{pkg.isAr ? <span className="ar-badge">AR</span> : "-"}</td>
+                        <td style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {activeListTab === 1 && (
+                            <>
+                              <button
+                                type="button"
+                                className={pkg.isDelivered ? "btn-delivered-done" : "btn-outline"}
+                                onClick={() => handlePatchPackage(pkg.id, { isDelivered: !pkg.isDelivered })}
+                              >
+                                {pkg.isDelivered ? "Entregue ✓" : "Entregue"}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-outline"
+                                onClick={() => handlePatchPackage(pkg.id, { inAbsentList: true })}
+                              >
+                                + Ausente
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-outline"
+                                onClick={() => handlePatchPackage(pkg.id, { inInsufficientList: true })}
+                              >
+                                + End. Insuf.
+                              </button>
+                              <button
+                                type="button"
+                                className="btn-outline"
+                                onClick={() => handlePatchPackage(pkg.id, { isActive: false, autoRecalculate: true })}
+                              >
+                                Desativar &rarr; L4
+                              </button>
+                            </>
+                          )}
+                          {activeListTab === 2 && (
+                            <button
+                              type="button"
+                              className="btn-outline"
+                              onClick={() => handlePatchPackage(pkg.id, { inAbsentList: false })}
+                            >
+                              Remover copia
+                            </button>
+                          )}
+                          {activeListTab === 3 && (
+                            <button
+                              type="button"
+                              className="btn-outline"
+                              onClick={() => handlePatchPackage(pkg.id, { inInsufficientList: false })}
+                            >
+                              Remover copia
+                            </button>
+                          )}
+                          {activeListTab === 4 && (
+                            <button
+                              type="button"
+                              className="btn-primary"
+                              onClick={() => handlePatchPackage(pkg.id, { isActive: true, autoRecalculate: true })}
+                            >
+                              Reativar &rarr; L1
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
 
           {/* Occurrence Logs */}

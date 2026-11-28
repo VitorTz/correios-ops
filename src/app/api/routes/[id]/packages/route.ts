@@ -8,6 +8,8 @@ import {
   isValidIslandCep,
   normalizeCep,
   normalizeStreetNumber,
+  ISLAND_CEP_MAX,
+  ISLAND_CEP_MIN
 } from "@/lib/cep";
 import {
   parseCorreiosList,
@@ -29,7 +31,7 @@ const manualPackageSchema = z.object({
     .transform(normalizeCep)
     .refine(
       isValidIslandCep,
-      "CEP fora do range da Ilha (88010-000 ate 88059-999)"
+      `CEP fora do range da Ilha (${ISLAND_CEP_MIN} até ${ISLAND_CEP_MAX})` 
     ),
   numero: z.string().optional().nullable(),
   isAr: z.boolean().optional().default(false),
@@ -92,7 +94,7 @@ export async function POST(
       return NextResponse.json(
         {
           error:
-            "Nenhuma encomenda valida encontrada no range 88010-000..88059-999.",
+            `Nenhuma encomenda valida encontrada no range ${ISLAND_CEP_MIN}..${ISLAND_CEP_MAX}.`,
           rejected,
         },
         { status: 400 }

@@ -4,7 +4,7 @@
  */
 
 export const ISLAND_CEP_MIN = 88010000;
-export const ISLAND_CEP_MAX = 88059999;
+export const ISLAND_CEP_MAX = 88069999;
 
 export const DEFAULT_DEPOT = {
   name: "CEE Correios - Av. Diomicio de Freitas, 1899",

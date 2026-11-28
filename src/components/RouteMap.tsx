@@ -43,7 +43,71 @@ interface RouteMapProps {
     lng: number,
     propagateToFutureCache: boolean
   ) => Promise<void>;
-  onToggleDelivered?: (pkgId: string, nextVal: boolean) => Promise<void>;
+}
+
+function escapeHtml(raw: string): string {
+  return raw
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function buildInfoWindowHtml(
+  stop: MapStop,
+  allStops: MapStop[],
+  packages: MapPackage[]
+): string {
+  const directPkgs = packages.filter((p) => p.stopId === stop.id);
+  const childStops =
+    stop.stopType === "anchor"
+      ? allStops.filter((s) => s.parentAnchorId === stop.id)
+      : [];
+
+  const title =
+    stop.stopType === "anchor"
+      ? `Ancora #${stop.sequenceOrder} (${directPkgs.length} pct)`
+      : `Adjacente (${stop.walkDistanceMeters ?? 0}m a pe · ${directPkgs.length} pct)`;
+
+  const renderRows = (items: MapPackage[]) =>
+    items
+      .map(
+        (pkg) => `
+      <li style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0;border-top:1px solid #e2e8f0;font-size:12px;">
+        <span style="font-family:monospace;font-weight:600;color:#0f172a;">${escapeHtml(pkg.trackingCode)}</span>
+        <span style="color:#475569;">${escapeHtml(pkg.numeroRaw ?? "S/N")}${
+          pkg.isAr
+            ? ' <span style="background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;border-radius:999px;padding:1px 5px;font-size:10px;font-weight:700;">AR</span>'
+            : ""
+        }</span>
+      </li>`
+      )
+      .join("");
+
+  const childrenHtml = childStops
+    .map((child) => {
+      const childPkgs = packages.filter((p) => p.stopId === child.id);
+      return `
+        <div style="margin-top:8px;padding-left:8px;border-left:2px solid #0d9488;">
+          <div style="font-size:11px;font-weight:600;color:#0f766e;">
+            + ${child.walkDistanceMeters ?? 0}m a pe · ${escapeHtml(child.label ?? "")} (${childPkgs.length})
+          </div>
+          <ul style="list-style:none;margin:4px 0 0;padding:0;">${renderRows(childPkgs)}</ul>
+        </div>`;
+    })
+    .join("");
+
+  return `
+    <div style="min-width:220px;max-width:290px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;">
+      <div style="font-weight:700;font-size:13px;color:#0f172a;">${escapeHtml(title)}</div>
+      <div style="font-size:11.5px;color:#64748b;margin:2px 0 8px;">${escapeHtml(stop.label ?? "")}</div>
+      <ul style="list-style:none;margin:0;padding:0;max-height:180px;overflow-y:auto;">${renderRows(directPkgs)}</ul>
+      ${childrenHtml}
+      <div style="display:flex;gap:8px;margin-top:10px;padding-top:8px;border-top:1px solid #e2e8f0;font-size:11.5px;">
+        <a href="https://www.google.com/maps/dir/?api=1&destination=${stop.lat},${stop.lng}&travelmode=driving" target="_blank" rel="noopener noreferrer" style="color:#1d4ed8;font-weight:600;text-decoration:none;">Google Maps &rarr;</a>
+        <a href="https://waze.com/ul?ll=${stop.lat},${stop.lng}&navigate=yes" target="_blank" rel="noopener noreferrer" style="color:#0d9488;font-weight:600;text-decoration:none;">Waze &rarr;</a>
+      </div>
+    </div>`;
 }
 
 export function RouteMap({
@@ -53,10 +117,8 @@ export function RouteMap({
   stops,
   packages,
   onPinMoved,
-  onToggleDelivered,
 }: RouteMapProps) {
   const mapRef = useRef<HTMLDivElement | null>(null);
-  const [selectedStop, setSelectedStop] = useState<MapStop | null>(null);
   const [pendingDrag, setPendingDrag] = useState<{
     pkgId: string;
     trackingCode: string;
@@ -85,28 +147,35 @@ export function RouteMap({
         streetViewControl: false,
       });
 
+      const infoWindow = new google.maps.InfoWindow();
       const bounds = new google.maps.LatLngBounds();
       bounds.extend({ lat: depotLat, lng: depotLng });
 
-      // CEE Depot marker (Start & End)
-      new google.maps.Marker({
+      // CEE Depot marker
+      const ceeMarker = new google.maps.Marker({
         position: { lat: depotLat, lng: depotLng },
         map,
         title: "CEE Correios (Partida e Retorno)",
         label: {
           text: "CEE",
           color: "#FFFFFF",
-          fontSize: "11px",
+          fontSize: "10px",
           fontWeight: "700",
         },
         icon: {
           path: google.maps.SymbolPath.CIRCLE,
-          scale: 14,
+          scale: 15,
           fillColor: "#0F172A",
           fillOpacity: 1,
           strokeColor: "#FFFFFF",
           strokeWeight: 2,
         },
+      });
+      ceeMarker.addListener("click", () => {
+        infoWindow.setContent(
+          "<strong>CEE Correios</strong><br/>Ponto de partida e retorno"
+        );
+        infoWindow.open({ map, anchor: ceeMarker });
       });
 
       if (encodedPolyline && google.maps.geometry?.encoding) {
@@ -160,7 +229,6 @@ export function RouteMap({
         const pos = { lat: stop.lat, lng: stop.lng };
         bounds.extend(pos);
 
-        // Anchor badge turns red if EITHER anchor OR any of its adjacent walking points has an AR package
         const linkedStopIds =
           stop.stopType === "anchor"
             ? new Set([
@@ -171,26 +239,26 @@ export function RouteMap({
               ])
             : new Set([stop.id]);
 
-        const stopPkgs = packages.filter(
+        const groupPkgs = packages.filter(
           (p) => p.stopId !== null && linkedStopIds.has(p.stopId)
         );
         const directPkgs = packages.filter((p) => p.stopId === stop.id);
-        const hasAr = stopPkgs.some((p) => p.isAr);
+        const hasAr = groupPkgs.some((p) => p.isAr);
 
         if (stop.stopType === "anchor") {
           const marker = new google.maps.Marker({
             position: pos,
             map,
-            title: `Ancora #${stop.sequenceOrder} (${stopPkgs.length} pct) — ${stop.label ?? ""}`,
+            title: `Ancora #${stop.sequenceOrder} (${directPkgs.length} pct) — ${stop.label ?? ""}`,
             label: {
-              text: String(stop.sequenceOrder),
+              text: `${stop.sequenceOrder}·${directPkgs.length}`,
               color: "#FFFFFF",
-              fontSize: "12px",
+              fontSize: "10px",
               fontWeight: "700",
             },
             icon: {
               path: google.maps.SymbolPath.CIRCLE,
-              scale: 13,
+              scale: 16,
               fillColor: hasAr ? "#DC2626" : "#1D4ED8",
               fillOpacity: 1,
               strokeColor: "#FFFFFF",
@@ -199,7 +267,10 @@ export function RouteMap({
             draggable: directPkgs.length === 1 && Boolean(onPinMoved),
           });
 
-          marker.addListener("click", () => setSelectedStop(stop));
+          marker.addListener("click", () => {
+            infoWindow.setContent(buildInfoWindowHtml(stop, stops, packages));
+            infoWindow.open({ map, anchor: marker });
+          });
 
           if (directPkgs.length === 1 && onPinMoved) {
             marker.addListener("dragend", (ev: google.maps.MapMouseEvent) => {
@@ -235,15 +306,42 @@ export function RouteMap({
                 },
               ],
             });
+
+            if (stop.walkDistanceMeters !== null) {
+              new google.maps.Marker({
+                position: {
+                  lat: (parent.lat + stop.lat) / 2,
+                  lng: (parent.lng + stop.lng) / 2,
+                },
+                map,
+                clickable: false,
+                icon: {
+                  path: google.maps.SymbolPath.CIRCLE,
+                  scale: 0,
+                },
+                label: {
+                  text: `${stop.walkDistanceMeters}m`,
+                  color: "#0F766E",
+                  fontSize: "10px",
+                  fontWeight: "700",
+                },
+              });
+            }
           }
 
           const marker = new google.maps.Marker({
             position: pos,
             map,
-            title: `Adjacente (${stop.walkDistanceMeters ?? 0}m a pe) — ${stop.label ?? ""}`,
+            title: `Adjacente (${stop.walkDistanceMeters ?? 0}m a pe · ${directPkgs.length} pct) — ${stop.label ?? ""}`,
+            label: {
+              text: String(directPkgs.length),
+              color: "#FFFFFF",
+              fontSize: "10px",
+              fontWeight: "700",
+            },
             icon: {
               path: google.maps.SymbolPath.CIRCLE,
-              scale: 7,
+              scale: 11,
               fillColor: hasAr ? "#DC2626" : "#0D9488",
               fillOpacity: 1,
               strokeColor: "#FFFFFF",
@@ -251,7 +349,11 @@ export function RouteMap({
             },
             draggable: directPkgs.length === 1 && Boolean(onPinMoved),
           });
-          marker.addListener("click", () => setSelectedStop(stop));
+
+          marker.addListener("click", () => {
+            infoWindow.setContent(buildInfoWindowHtml(stop, stops, packages));
+            infoWindow.open({ map, anchor: marker });
+          });
 
           if (directPkgs.length === 1 && onPinMoved) {
             marker.addListener("dragend", (ev: google.maps.MapMouseEvent) => {
@@ -277,23 +379,13 @@ export function RouteMap({
     };
   }, [depotLat, depotLng, encodedPolyline, stops, packages, onPinMoved]);
 
-  // When an Anchor is selected, show BOTH its own packages AND all linked Adjacent walking packages
-  const selectedStopGroup = selectedStop
-    ? selectedStop.stopType === "anchor"
-      ? [
-          selectedStop,
-          ...stops.filter((s) => s.parentAnchorId === selectedStop.id),
-        ]
-      : [selectedStop]
-    : [];
-
   return (
     <div>
       <div
         ref={mapRef}
         style={{
           width: "100%",
-          height: 460,
+          height: 480,
           borderRadius: 10,
           border: "1px solid var(--border)",
           background: "#e2e8f0",
@@ -309,14 +401,14 @@ export function RouteMap({
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               type="button"
-              className="tab-btn"
+              className="btn-outline"
               onClick={() => setPendingDrag(null)}
             >
               Cancelar
             </button>
             <button
               type="button"
-              className="tab-btn"
+              className="btn-outline"
               onClick={async () => {
                 await onPinMoved(
                   pendingDrag.pkgId,
@@ -345,101 +437,6 @@ export function RouteMap({
               Salvar e propagar para rotas futuras
             </button>
           </div>
-        </div>
-      )}
-
-      {selectedStop && (
-        <div className="panel" style={{ marginTop: 14 }}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: 12,
-              flexWrap: "wrap",
-            }}
-          >
-            <div>
-              <strong>
-                {selectedStop.stopType === "anchor"
-                  ? `Ponto Ancora #${selectedStop.sequenceOrder} (Carro + Adjacentes a pe)`
-                  : `Ponto Adjacente (${selectedStop.walkDistanceMeters ?? 0}m a pe)`}
-              </strong>{" "}
-              — {selectedStop.label}
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <a
-                className="tab-btn"
-                href={`https://www.google.com/maps/dir/?api=1&destination=${selectedStop.lat},${selectedStop.lng}&travelmode=driving`}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Google Maps
-              </a>
-              <a
-                className="tab-btn"
-                href={`https://waze.com/ul?ll=${selectedStop.lat},${selectedStop.lng}&navigate=yes`}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Waze
-              </a>
-              <button
-                type="button"
-                className="tab-btn"
-                onClick={() => setSelectedStop(null)}
-              >
-                Fechar
-              </button>
-            </div>
-          </div>
-
-          {selectedStopGroup.map((stopItem) => {
-            const items = packages.filter((p) => p.stopId === stopItem.id);
-            return (
-              <div key={stopItem.id} style={{ marginTop: 14 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--muted)" }}>
-                  {stopItem.stopType === "anchor"
-                    ? `No ponto ancora: ${stopItem.label}`
-                    : `Adjacente (+${stopItem.walkDistanceMeters ?? 0}m a pe): ${stopItem.label}`}
-                </div>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Entregue</th>
-                      <th>Objeto</th>
-                      <th>CEP</th>
-                      <th>Numero</th>
-                      <th>AR</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((pkg) => (
-                      <tr key={pkg.id}>
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={pkg.isDelivered}
-                            onChange={(e) =>
-                              onToggleDelivered?.(pkg.id, e.target.checked)
-                            }
-                          />
-                        </td>
-                        <td>
-                          <code>{pkg.trackingCode}</code>
-                        </td>
-                        <td>{pkg.cep}</td>
-                        <td>{pkg.numeroRaw ?? "S/N"}</td>
-                        <td>
-                          {pkg.isAr ? <span className="ar-badge">AR</span> : "-"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            );
-          })}
         </div>
       )}
     </div>
